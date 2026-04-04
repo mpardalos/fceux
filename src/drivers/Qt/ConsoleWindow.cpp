@@ -108,6 +108,7 @@
 #include "Qt/NameTableViewer.h"
 #include "Qt/iNesHeaderEditor.h"
 #include "Qt/RamWatch.h"
+#include "Qt/BasicBlockView.h"
 #include "Qt/RamSearch.h"
 #include "Qt/keyscan.h"
 #include "Qt/nes_shm.h"
@@ -1907,6 +1908,13 @@ void consoleWin_t::createMainMenu(void)
 	
 	debugMenu->addAction(iNesEditAct);
 
+	// Debug -> Basic Block View
+	basicBlockViewAct = new QAction(tr("Basic Block View"), this);
+	basicBlockViewAct->setStatusTip(tr("Open Basic Block View"));
+	connect(basicBlockViewAct, SIGNAL(triggered()), this, SLOT(openBasicBlockView(void)) );
+
+	debugMenu->addAction(basicBlockViewAct);
+
 	//-----------------------------------------------------------------------
 	// Movie
 
@@ -3419,6 +3427,11 @@ void consoleWin_t::openRamWatch(void)
    ramWatchWin = new RamWatchDialog_t(this);
 	
    ramWatchWin->show();
+}
+
+void consoleWin_t::openBasicBlockView(void)
+{
+	openBasicBlockViewWindow(this);
 }
 
 void consoleWin_t::openRamSearch(void)

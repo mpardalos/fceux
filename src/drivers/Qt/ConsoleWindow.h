@@ -250,6 +250,7 @@ class  consoleWin_t : public QMainWindow
 		QAction *ntViewAct;
 		QAction *ggEncodeAct;
 		QAction *iNesEditAct;
+		QAction *basicBlockViewAct;
 		QAction *openMovAct;
 		QAction *playMovBeginAct;
 		QAction *stopMovAct;
@@ -433,6 +434,7 @@ class  consoleWin_t : public QMainWindow
 		void openCheats(void);
 		void openRamWatch(void);
 		void openRamSearch(void);
+		void openBasicBlockView(void);
 		void openMovie(void);
 		void stopMovie(void);
 		void playMovieFromBeginning(void);
