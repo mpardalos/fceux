@@ -21,6 +21,8 @@
 
 #include <ios>
 #include <iostream>
+#include <qgraphicsview.h>
+#include <qnamespace.h>
 #include <stack>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +32,9 @@
 #include <QColorDialog>
 #include <QFileDialog>
 #include <QFontDialog>
+#include <QGraphicsScene>
+#include <QGraphicsTextItem>
+#include <QGraphicsView>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QMenuBar>
@@ -39,6 +44,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTableWidget>
 #include <SDL.h>
 
 // Must be before the following. Keep a space here so clang-format
@@ -100,8 +106,8 @@ struct Instruction
 		break;
 		case 0x60: // RTS (ReTurn from Subroutine)
 		case 0x40: // RTI (ReTurn from Interrupt)
-			// No statically-known successors. We need to walk the whole program
-			// to find callers
+			// No statically-known successors. We need to walk the whole
+			// program to find callers
 			break;
 		case 0x10: // BPL (Branch on PLus)
 		case 0x30: // BMI (Branch on MInus)
@@ -242,9 +248,13 @@ void openBasicBlockViewWindow(QWidget *parent, int force)
 BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 	: QDialog(parent, Qt::Window)
 {
+	/* Load data */
+	uint16 reset, irq, nmi;
+	FCEUI_GetIVectors(&reset, &irq, &nmi);
+	const BasicBlockSet bbs = BasicBlockSet::fromAddress(reset);
+
 	QSettings settings;
 	QVBoxLayout *mainLayout;
-	QLabel *lbl;
 
 	setWindowTitle("Basic Block View");
 
@@ -252,9 +262,7 @@ BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 
 	mainLayout = new QVBoxLayout();
 
-	lbl = new QLabel(tr("Basic Block View — coming soon"));
-	lbl->setAlignment(Qt::AlignCenter);
-	mainLayout->addWidget(lbl);
+	mainLayout->addWidget(new BasicBlockDisplay(bbs));
 
 	setLayout(mainLayout);
 
@@ -262,11 +270,6 @@ BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 
 	restoreGeometry(settings.value("basicBlockView/geometry").toByteArray());
 
-	/* Load data */
-	uint16 reset, irq, nmi;
-	FCEUI_GetIVectors(&reset, &irq, &nmi);
-
-	const BasicBlockSet bbs = BasicBlockSet::fromAddress(reset);
 	std::cout << bbs << std::endl;
 }
 //----------------------------------------------------------------------------
@@ -298,3 +301,96 @@ void BasicBlockView_t::closeWindow(void)
 	deleteLater();
 }
 //----------------------------------------------------------------------------
+BasicBlockDisplay::BasicBlockDisplay(const BasicBlockSet &bbs, QWidget *parent)
+	: QGraphicsView(parent)
+{
+	setScene(&scene_);
+	setDragMode(QGraphicsView::ScrollHandDrag);
+
+	int xPos = 0;
+	int yPos = 0;
+	// Insert
+	for (const auto &[addr, bb] : bbs.basicBlocks)
+	{
+		BasicBlockItem *item = new BasicBlockItem(bb);
+		item->setPos(xPos, yPos);
+		scene_.addItem(item);
+		addrToBasicBlockItem.emplace(addr, item);
+		xPos += 50;
+		yPos += item->size().height() + 20;
+	}
+
+	// Connect
+	for (const auto [_, fromBBItem] : addrToBasicBlockItem)
+	{
+		for (const uint16 toAddr : fromBBItem->bb_.next())
+		{
+			const BasicBlockItem *toBBItem = addrToBasicBlockItem.at(toAddr);
+
+			QPointF fromPt =
+				fromBBItem->pos() + QPointF(fromBBItem->size().width() / 2,
+											fromBBItem->size().height());
+			QPointF toPt =
+				toBBItem->pos() + QPointF(toBBItem->size().width() / 2, 0);
+
+			QPainterPath path(fromPt);
+			if (fromBBItem == toBBItem)
+			{
+				// Self-loop: curve out to the right and back
+				qreal w = fromBBItem->size().width();
+				qreal h = fromBBItem->size().height();
+				QPointF rightEdge = fromBBItem->pos() + QPointF(w + 40, h / 2);
+				path.cubicTo(rightEdge + QPointF(0, h / 2),
+							 rightEdge + QPointF(0, -h / 2), toPt);
+			}
+			else
+			{
+				path.lineTo(toPt);
+			}
+
+			auto *pathItem = scene_.addPath(path, QPen(Qt::black, 2));
+			pathItem->setZValue(10);
+		}
+	}
+}
+//----------------------------------------------------------------------------
+BasicBlockItem::BasicBlockItem(const BasicBlock &bb, QGraphicsItem *parent)
+	: QGraphicsProxyWidget(parent), bb_(bb)
+{
+	int cols = std::max((int)bb.next().size(), 1);
+	int rows = bb.instructions.size() + 1;
+
+	QTableWidget *table = new QTableWidget(rows, cols);
+	table->horizontalHeader()->hide();
+	table->horizontalHeader()->setSectionResizeMode(
+		QHeaderView::ResizeToContents);
+	table->verticalHeader()->hide();
+	table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+	int row = 0;
+	for (const Instruction &insn : bb.instructions)
+	{
+		auto *item = new QTableWidgetItem(QString::fromStdString(insn.pretty));
+		table->setItem(row, 0, item);
+		table->setSpan(row, 0, 1, cols);
+		row++;
+	}
+
+	int col = 0;
+	for (const uint16 addr : bb.next())
+	{
+		auto *item = new QTableWidgetItem(QString::asprintf("0x%04X", addr));
+		item->setTextAlignment(Qt::AlignCenter);
+		table->setItem(row, col, item);
+		col++;
+	}
+
+	table->setWordWrap(false);
+	table->setFocusPolicy(Qt::NoFocus);
+	table->resizeColumnsToContents();
+	table->resizeRowsToContents();
+	table->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+	table->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+	setWidget(table);
+}
