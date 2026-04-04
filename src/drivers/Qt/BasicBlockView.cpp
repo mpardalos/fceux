@@ -21,6 +21,7 @@
 
 #include <ios>
 #include <iostream>
+#include <stack>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -181,6 +182,50 @@ std::ostream &operator<<(std::ostream &o, const BasicBlock &bb)
 	return o;
 }
 
+struct BasicBlockSet
+{
+	std::map<uint16, BasicBlock> basicBlocks;
+
+	const BasicBlock &at(uint16 addr) const { return basicBlocks.at(addr); }
+
+	static BasicBlockSet fromAddress(uint16 startAddr)
+	{
+		std::stack<uint16> addresses;
+		addresses.push(startAddr);
+		BasicBlockSet bbSet;
+
+		while (!addresses.empty())
+		{
+			const uint16 addr = addresses.top();
+			addresses.pop();
+			std::cerr << "Process " << std::hex << addr << "\n";
+			const BasicBlock bb = BasicBlock::fromAddress(addr);
+			bbSet.basicBlocks.insert({addr, bb});
+			for (uint16 nextAddr : bb.next())
+			{
+				if (bbSet.basicBlocks.count(nextAddr) == 0)
+				{
+					addresses.push(nextAddr);
+				}
+			}
+		}
+		return bbSet;
+	}
+};
+
+std::ostream &operator<<(std::ostream &o, const BasicBlockSet &bbSet)
+{
+	int limit = 4;
+	for (auto [addr, bb] : bbSet.basicBlocks)
+	{
+		if (limit <= 0)
+			break;
+		o << bb << "\n";
+		limit -= 1;
+	}
+	return o;
+}
+
 static BasicBlockView_t *basicBlockViewWin = NULL;
 //----------------------------------------------------------------------------
 void openBasicBlockViewWindow(QWidget *parent, int force)
@@ -221,8 +266,8 @@ BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 	uint16 reset, irq, nmi;
 	FCEUI_GetIVectors(&reset, &irq, &nmi);
 
-	const BasicBlock reset_bb = BasicBlock::fromAddress(reset);
-	std::cout << reset_bb << std::endl;
+	const BasicBlockSet bbs = BasicBlockSet::fromAddress(reset);
+	std::cout << bbs << std::endl;
 }
 //----------------------------------------------------------------------------
 BasicBlockView_t::~BasicBlockView_t(void)
