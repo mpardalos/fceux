@@ -3,3 +3,7 @@ IndentWidth: 4
 TabWidth: 4
 BasedOnStyle: LLVM
 BreakBeforeBraces: Allman
+IndentAccessModifiers: false
+AccessModifierOffset: -4
+AttributeMacros:
+  - Q_OBJECT
