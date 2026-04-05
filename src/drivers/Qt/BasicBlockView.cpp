@@ -423,40 +423,13 @@ BasicBlockDisplay::BasicBlockDisplay(const BasicBlockSet &bbs, QWidget *parent)
 BasicBlockItem::BasicBlockItem(const BasicBlock &bb, QGraphicsItem *parent)
 	: QGraphicsProxyWidget(parent), bb_(bb)
 {
-	int cols = std::max((int)bb.next().size(), 1);
-	int rows = bb.instructions.size() + 1;
+	std::ostringstream oss;
+	oss << bb;
+	QString text = QString::fromStdString(oss.str());
 
-	QTableWidget *table = new QTableWidget(rows, cols);
-	table->horizontalHeader()->hide();
-	table->horizontalHeader()->setSectionResizeMode(
-		QHeaderView::ResizeToContents);
-	table->verticalHeader()->hide();
-	table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	QLabel *label = new QLabel(text);
+	label->setFont(QFont("monospace"));
+	label->setContentsMargins(6, 4, 6, 4);
 
-	int row = 0;
-	for (const Instruction &insn : bb.instructions)
-	{
-		auto *item = new QTableWidgetItem(QString::fromStdString(insn.pretty));
-		table->setItem(row, 0, item);
-		table->setSpan(row, 0, 1, cols);
-		row++;
-	}
-
-	int col = 0;
-	for (const uint16 addr : bb.next())
-	{
-		auto *item = new QTableWidgetItem(QString::asprintf("0x%04X", addr));
-		item->setTextAlignment(Qt::AlignCenter);
-		table->setItem(row, col, item);
-		col++;
-	}
-
-	table->setWordWrap(false);
-	table->setFocusPolicy(Qt::NoFocus);
-	table->resizeColumnsToContents();
-	table->resizeRowsToContents();
-	table->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-	table->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-
-	setWidget(table);
+	setWidget(label);
 }
