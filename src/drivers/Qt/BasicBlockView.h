@@ -61,5 +61,4 @@ public:
 
 private:
 	QGraphicsScene scene_;
-	std::map<uint16, const BasicBlockItem *> addrToBasicBlockItem;
 };

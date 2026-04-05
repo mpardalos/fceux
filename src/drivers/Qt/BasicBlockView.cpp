@@ -190,15 +190,16 @@ std::ostream &operator<<(std::ostream &o, const BasicBlock &bb)
 
 struct BasicBlockSet
 {
+	uint16 entry;
 	std::map<uint16, BasicBlock> basicBlocks;
 
 	const BasicBlock &at(uint16 addr) const { return basicBlocks.at(addr); }
 
-	static BasicBlockSet fromAddress(uint16 startAddr)
+	static BasicBlockSet fromAddress(uint16 entry)
 	{
 		std::stack<uint16> addresses;
-		addresses.push(startAddr);
-		BasicBlockSet bbSet;
+		addresses.push(entry);
+		BasicBlockSet bbSet{.entry = entry};
 
 		while (!addresses.empty())
 		{
@@ -301,23 +302,88 @@ void BasicBlockView_t::closeWindow(void)
 	deleteLater();
 }
 //----------------------------------------------------------------------------
+void computeLayers(
+	const std::map<uint16, BasicBlockItem *> &addrToBasicBlockItem,
+	std::map<uint16, unsigned> &layoutLayer, uint16 startAddr,
+	unsigned layer = 0)
+{
+	if (layoutLayer.count(startAddr) != 0)
+	{
+		return;
+	}
+	layoutLayer.insert({startAddr, layer});
+	for (auto nextAddr : addrToBasicBlockItem.at(startAddr)->bb_.next())
+	{
+		computeLayers(addrToBasicBlockItem, layoutLayer, nextAddr, layer + 1);
+	}
+}
+
 BasicBlockDisplay::BasicBlockDisplay(const BasicBlockSet &bbs, QWidget *parent)
 	: QGraphicsView(parent)
 {
 	setScene(&scene_);
 	setDragMode(QGraphicsView::ScrollHandDrag);
 
-	int xPos = 0;
-	int yPos = 0;
+	std::map<uint16, BasicBlockItem *> addrToBasicBlockItem;
+	std::map<uint16, unsigned> layoutLayer;
+	std::map<uint16, unsigned> layoutOffset;
+	std::map<uint16, unsigned> layerHeights;
+	// void computeLayers(uint16 startAddr, unsigned layer = 0);
+
 	// Insert
 	for (const auto &[addr, bb] : bbs.basicBlocks)
 	{
-		BasicBlockItem *item = new BasicBlockItem(bb);
-		item->setPos(xPos, yPos);
-		scene_.addItem(item);
+	    BasicBlockItem *item = new BasicBlockItem(bb);
 		addrToBasicBlockItem.emplace(addr, item);
-		xPos += 50;
-		yPos += item->size().height() + 20;
+		scene_.addItem(item);
+	}
+
+	// Pick layers
+	computeLayers(addrToBasicBlockItem, layoutLayer, bbs.entry);
+
+	// Decide layer heights
+	for (const auto &[addr, bbItem] : addrToBasicBlockItem)
+	{
+		const unsigned layer = layoutLayer[addr];
+		const unsigned height = bbItem->size().height();
+		if (layerHeights.count(layer) == 0)
+		{
+			layerHeights.insert({layer, height});
+		}
+		layerHeights[layer] = std::max(layerHeights[layer], height);
+	}
+
+	// Group blocks by layer
+	std::map<unsigned, std::vector<uint16>> layers;
+	for (const auto &[addr, layer] : layoutLayer)
+	{
+		layers[layer].push_back(addr);
+	}
+
+	// Place vertically
+	const unsigned LAYER_GAP = 20;
+	for (auto &[addr, bbItem] : addrToBasicBlockItem)
+	{
+		const unsigned layer = layoutLayer[addr];
+		unsigned yPos = 0;
+		for (unsigned i = 0; i < layer; ++i)
+		{
+			yPos += layerHeights[i] + LAYER_GAP;
+		}
+		bbItem->setY(yPos);
+	}
+
+	// Place horizontally: space out blocks within each layer
+	const unsigned BLOCK_GAP = 20;
+	for (auto &[layer, layerAddrs] : layers)
+	{
+		qreal x = 0;
+		for (uint16 addr : layerAddrs)
+		{
+			auto *item = addrToBasicBlockItem[addr];
+			item->setX(x);
+			x += item->size().width() + BLOCK_GAP;
+		}
 	}
 
 	// Connect
