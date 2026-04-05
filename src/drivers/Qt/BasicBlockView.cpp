@@ -225,12 +225,137 @@ std::ostream &operator<<(std::ostream &o, const BasicBlockSet &bbSet)
 	int limit = 4;
 	for (auto [addr, bb] : bbSet.basicBlocks)
 	{
-		if (limit <= 0)
-			break;
+		if (limit <= 0) break;
 		o << bb << "\n";
 		limit -= 1;
 	}
 	return o;
+}
+
+void GraphView::computeLayers(Node &node, unsigned layer)
+{
+	if (node.layer)
+	{
+		return;
+	}
+	node.layer = layer;
+	for (Node *next : node.nexts)
+	{
+		computeLayers(*next, layer + 1);
+	}
+}
+
+GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
+	: QGraphicsView(parent)
+{
+	setScene(&scene_);
+	setDragMode(QGraphicsView::ScrollHandDrag);
+
+	// Make nodes
+	for (const auto &[addr, bb] : bbSet.basicBlocks)
+	{
+		BasicBlockItem *bbItem = new BasicBlockItem(bb);
+		scene_.addItem(bbItem);
+		nodes.push_back({&bb, bbItem});
+		addrToNode.insert({addr, &nodes.back()});
+	}
+
+	// Add edges
+	for (const auto &[addr, bb] : bbSet.basicBlocks)
+	{
+		for (uint16 nextAddr : bb.next())
+		{
+			addrToNode.at(addr)->nexts.push_back(addrToNode.at(nextAddr));
+		}
+	}
+
+	// Pick layers
+	computeLayers(*addrToNode.at(bbSet.entry));
+
+	// Decide layer heights
+	for (const Node &node : nodes)
+	{
+		assert(node.layer); // All layers should be decided at this point
+		const unsigned height =
+			node.widget ? node.widget->size().height() : 0;
+		if (layerHeights.count(*node.layer) == 0)
+		{
+			layerHeights.insert({*node.layer, height});
+		}
+		layerHeights[*node.layer] =
+			std::max(layerHeights[*node.layer], height);
+	}
+
+	// Group blocks by layer
+	std::map<unsigned, std::vector<Node *>> layers;
+	for (Node &node : nodes)
+	{
+		layers[*node.layer].push_back(&node);
+	}
+
+	// Place vertically
+	const unsigned LAYER_GAP = 20;
+	for (Node &node : nodes)
+	{
+		if (!node.widget) continue;
+		unsigned yPos = 0;
+		for (unsigned i = 0; i < *node.layer; ++i)
+		{
+			yPos += layerHeights[i] + LAYER_GAP;
+		}
+		node.widget->setY(yPos);
+	}
+
+	// Place horizontally: space out blocks within each layer
+	const unsigned BLOCK_GAP = 20;
+	for (auto &[layer, layerNodes] : layers)
+	{
+		qreal x = 0;
+		for (Node *node : layerNodes)
+		{
+			if (!node->widget) continue;
+			node->widget->setX(x);
+			x += node->widget->size().width() + BLOCK_GAP;
+		}
+	}
+
+	// Draw edges
+	for (const Node &fromNode : nodes)
+	{
+		if (!fromNode.widget) continue;
+		for (const Node *toNode : fromNode.nexts)
+		{
+			if (!toNode->widget) continue;
+
+			BasicBlockItem &fromItem = *fromNode.widget;
+			BasicBlockItem &toItem = *toNode->widget;
+
+			QPointF fromPt =
+				fromItem.pos() +
+				QPointF(fromItem.size().width() / 2, fromItem.size().height());
+			QPointF toPt =
+				toItem.pos() + QPointF(toItem.size().width() / 2, 0);
+
+			QPainterPath path(fromPt);
+			if (&fromItem == &toItem)
+			{
+				// Self-loop: curve out to the right and back
+				qreal w = fromItem.size().width();
+				qreal h = fromItem.size().height();
+				QPointF rightEdge =
+					fromItem.pos() + QPointF(w + 40, h / 2);
+				path.cubicTo(rightEdge + QPointF(0, h / 2),
+							 rightEdge + QPointF(0, -h / 2), toPt);
+			}
+			else
+			{
+				path.lineTo(toPt);
+			}
+
+			auto *pathItem = scene_.addPath(path, QPen(Qt::black, 2));
+			pathItem->setZValue(10);
+		}
+	}
 }
 
 static BasicBlockView_t *basicBlockViewWin = NULL;
@@ -239,8 +364,7 @@ void openBasicBlockViewWindow(QWidget *parent, int force)
 {
 	if (!force)
 	{
-		if (basicBlockViewWin != NULL)
-			return;
+		if (basicBlockViewWin != NULL) return;
 	}
 	basicBlockViewWin = new BasicBlockView_t(parent);
 	basicBlockViewWin->show();
@@ -263,7 +387,8 @@ BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 
 	mainLayout = new QVBoxLayout();
 
-	mainLayout->addWidget(new BasicBlockDisplay(bbs));
+	graphView_ = new GraphView(bbs, this);
+	mainLayout->addWidget(graphView_);
 
 	setLayout(mainLayout);
 
@@ -300,124 +425,6 @@ void BasicBlockView_t::closeWindow(void)
 	settings.setValue("basicBlockView/geometry", saveGeometry());
 	done(0);
 	deleteLater();
-}
-//----------------------------------------------------------------------------
-void computeLayers(
-	const std::map<uint16, BasicBlockItem *> &addrToBasicBlockItem,
-	std::map<uint16, unsigned> &layoutLayer, uint16 startAddr,
-	unsigned layer = 0)
-{
-	if (layoutLayer.count(startAddr) != 0)
-	{
-		return;
-	}
-	layoutLayer.insert({startAddr, layer});
-	for (auto nextAddr : addrToBasicBlockItem.at(startAddr)->bb_.next())
-	{
-		computeLayers(addrToBasicBlockItem, layoutLayer, nextAddr, layer + 1);
-	}
-}
-
-BasicBlockDisplay::BasicBlockDisplay(const BasicBlockSet &bbs, QWidget *parent)
-	: QGraphicsView(parent)
-{
-	setScene(&scene_);
-	setDragMode(QGraphicsView::ScrollHandDrag);
-
-	std::map<uint16, BasicBlockItem *> addrToBasicBlockItem;
-	std::map<uint16, unsigned> layoutLayer;
-	std::map<uint16, unsigned> layoutOffset;
-	std::map<uint16, unsigned> layerHeights;
-	// void computeLayers(uint16 startAddr, unsigned layer = 0);
-
-	// Insert
-	for (const auto &[addr, bb] : bbs.basicBlocks)
-	{
-	    BasicBlockItem *item = new BasicBlockItem(bb);
-		addrToBasicBlockItem.emplace(addr, item);
-		scene_.addItem(item);
-	}
-
-	// Pick layers
-	computeLayers(addrToBasicBlockItem, layoutLayer, bbs.entry);
-
-	// Decide layer heights
-	for (const auto &[addr, bbItem] : addrToBasicBlockItem)
-	{
-		const unsigned layer = layoutLayer[addr];
-		const unsigned height = bbItem->size().height();
-		if (layerHeights.count(layer) == 0)
-		{
-			layerHeights.insert({layer, height});
-		}
-		layerHeights[layer] = std::max(layerHeights[layer], height);
-	}
-
-	// Group blocks by layer
-	std::map<unsigned, std::vector<uint16>> layers;
-	for (const auto &[addr, layer] : layoutLayer)
-	{
-		layers[layer].push_back(addr);
-	}
-
-	// Place vertically
-	const unsigned LAYER_GAP = 20;
-	for (auto &[addr, bbItem] : addrToBasicBlockItem)
-	{
-		const unsigned layer = layoutLayer[addr];
-		unsigned yPos = 0;
-		for (unsigned i = 0; i < layer; ++i)
-		{
-			yPos += layerHeights[i] + LAYER_GAP;
-		}
-		bbItem->setY(yPos);
-	}
-
-	// Place horizontally: space out blocks within each layer
-	const unsigned BLOCK_GAP = 20;
-	for (auto &[layer, layerAddrs] : layers)
-	{
-		qreal x = 0;
-		for (uint16 addr : layerAddrs)
-		{
-			auto *item = addrToBasicBlockItem[addr];
-			item->setX(x);
-			x += item->size().width() + BLOCK_GAP;
-		}
-	}
-
-	// Connect
-	for (const auto [_, fromBBItem] : addrToBasicBlockItem)
-	{
-		for (const uint16 toAddr : fromBBItem->bb_.next())
-		{
-			const BasicBlockItem *toBBItem = addrToBasicBlockItem.at(toAddr);
-
-			QPointF fromPt =
-				fromBBItem->pos() + QPointF(fromBBItem->size().width() / 2,
-											fromBBItem->size().height());
-			QPointF toPt =
-				toBBItem->pos() + QPointF(toBBItem->size().width() / 2, 0);
-
-			QPainterPath path(fromPt);
-			if (fromBBItem == toBBItem)
-			{
-				// Self-loop: curve out to the right and back
-				qreal w = fromBBItem->size().width();
-				qreal h = fromBBItem->size().height();
-				QPointF rightEdge = fromBBItem->pos() + QPointF(w + 40, h / 2);
-				path.cubicTo(rightEdge + QPointF(0, h / 2),
-							 rightEdge + QPointF(0, -h / 2), toPt);
-			}
-			else
-			{
-				path.lineTo(toPt);
-			}
-
-			auto *pathItem = scene_.addPath(path, QPen(Qt::black, 2));
-			pathItem->setZValue(10);
-		}
-	}
 }
 //----------------------------------------------------------------------------
 BasicBlockItem::BasicBlockItem(const BasicBlock &bb, QGraphicsItem *parent)

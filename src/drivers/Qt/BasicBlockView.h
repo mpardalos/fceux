@@ -11,7 +11,13 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <map>
+#include <optional>
+#include <deque>
+#include <vector>
 #include <types.h>
+
+class GraphView;
 
 class BasicBlockView_t : public QDialog
 {
@@ -24,6 +30,9 @@ public:
 protected:
 	void closeEvent(QCloseEvent *event);
 
+private:
+	GraphView *graphView_;
+
 public slots:
 	void closeWindow(void);
 };
@@ -31,6 +40,7 @@ public slots:
 void openBasicBlockViewWindow(QWidget *parent, int force = 0);
 
 //-------- Internal widgets ----------
+// These are only here to be picked up by Qt, you should not use these
 
 struct BasicBlock;
 struct BasicBlockSet;
@@ -45,20 +55,36 @@ public:
 
 protected:
 	// Ignore wheel events. We want to scroll the
-	// BasicBlockDisplay even while mouse is over a block
+	// GraphView even while mouse is over a block
 	void wheelEvent(QGraphicsSceneWheelEvent *event) override
 	{
 		event->ignore();
 	}
 };
 
-class BasicBlockDisplay : public QGraphicsView
+class GraphView : public QGraphicsView
 {
 Q_OBJECT
 
 public:
-	BasicBlockDisplay(const BasicBlockSet &bbs, QWidget *parent = nullptr);
+	GraphView(const BasicBlockSet &bbSet, QWidget *parent = nullptr);
 
 private:
+	struct Node
+	{
+		const BasicBlock *bb;
+		BasicBlockItem *widget;
+		std::vector<Node *> prevs;
+		std::vector<Node *> nexts;
+		std::optional<double> posX = std::nullopt;
+		std::optional<double> posY = std::nullopt;
+		std::optional<unsigned> layer = std::nullopt;
+	};
+
 	QGraphicsScene scene_;
+	std::deque<Node> nodes; // We use a deque, not a vector, because it keeps addresses stable
+	std::map<uint16, Node *> addrToNode;
+	std::map<uint16, unsigned> layerHeights;
+
+	void computeLayers(Node &node, unsigned layer = 0);
 };
