@@ -57,8 +57,15 @@ private:
 	struct Node;
 	struct EdgeInfo
 	{
-		std::reference_wrapper<Node> target; // reference_wrapper so that it is rebindable
+		const Node& source;
+		// reference_wrapper so that it is rebindable
+		std::reference_wrapper<Node> target;
+		// This can be an "under" or "over" track, depending on
+		// if the edge is going upwards or downwards
 		unsigned track;
+
+		bool needsOverTrack() const;
+		bool needsUnderTrack() const;
 	};
 
 	struct Node
@@ -110,9 +117,11 @@ private:
 	struct LayerInfo
 	{
 		std::vector<std::reference_wrapper<Node>> nodes;
-		unsigned tracks() const;
+		unsigned overTracks() const;
+		unsigned underTracks() const;
 		qreal nodeAreaHeight() const;
-		qreal trackAreaHeight() const;
+		qreal overTrackAreaHeight() const;
+		qreal underTrackAreaHeight() const;
 		qreal layerHeight() const;
 	};
 

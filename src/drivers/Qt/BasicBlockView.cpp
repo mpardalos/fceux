@@ -221,6 +221,48 @@ struct BasicBlockSet
 	}
 };
 
+unsigned GraphView::LayerInfo::overTracks() const
+{
+	qreal count = 0;
+	for (const Node &node : nodes)
+	{
+		for (const EdgeInfo &edge : node.nexts)
+		{
+			if (edge.needsOverTrack())
+			{
+				count += 1;
+			}
+		}
+	}
+	return count;
+}
+
+qreal GraphView::LayerInfo::overTrackAreaHeight() const
+{
+	return TRACK_HEIGHT * overTracks();
+}
+
+unsigned GraphView::LayerInfo::underTracks() const
+{
+	unsigned count = 0;
+	for (const Node &node : nodes)
+	{
+		for (const EdgeInfo &edge : node.nexts)
+		{
+			if (edge.needsUnderTrack())
+			{
+				count += 1;
+			}
+		}
+	}
+	return count;
+}
+
+qreal GraphView::LayerInfo::underTrackAreaHeight() const
+{
+	return TRACK_HEIGHT * underTracks();
+}
+
 qreal GraphView::LayerInfo::nodeAreaHeight() const
 {
 	qreal height = 0;
@@ -231,23 +273,37 @@ qreal GraphView::LayerInfo::nodeAreaHeight() const
 	return height;
 }
 
-qreal GraphView::LayerInfo::trackAreaHeight() const
-{
-	qreal height = 0;
-	for (const Node &node : nodes)
-	{
-		for (const EdgeInfo &edge : node.nexts)
-		{
-			height += TRACK_HEIGHT;
-		}
-	}
-	return height;
-}
-
 qreal GraphView::LayerInfo::layerHeight() const
 {
-	return nodeAreaHeight() + trackAreaHeight();
+	return overTrackAreaHeight() + nodeAreaHeight() + underTrackAreaHeight();
 }
+
+bool GraphView::EdgeInfo::needsOverTrack() const
+{
+	if (source.layer < target.get().layer)
+	{
+		return false;
+	}
+	else if (source.layer > target.get().layer)
+	{
+		return true;
+	}
+	else
+	{
+		if (dynamic_cast<const DummyNode *>(&source))
+		{
+			assert(!dynamic_cast<const DummyNode *>(&target.get()));
+			return true;
+		}
+		else
+		{
+			assert(dynamic_cast<const DummyNode *>(&target.get()));
+			return false;
+		}
+	}
+}
+
+bool GraphView::EdgeInfo::needsUnderTrack() const { return !needsOverTrack(); }
 
 // Returns max layer assigned
 unsigned GraphView::computeLayers(Node &node, unsigned layer)
@@ -285,8 +341,12 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 	{
 		for (uint16 nextAddr : bb.next())
 		{
-			addrToNode.at(addr)->nexts.push_back(
-				EdgeInfo{.target = *addrToNode.at(nextAddr), .track = 0});
+			Node *node = addrToNode.at(addr);
+			node->nexts.push_back(EdgeInfo{
+				.source = *node,
+				.target = *addrToNode.at(nextAddr),
+				.track = 0,
+			});
 		}
 	}
 
@@ -320,14 +380,20 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					}
 					else
 					{
-						lastFrom->nexts.push_back({std::ref(*dummy), 0});
+						lastFrom->nexts.push_back(EdgeInfo{
+							.source = *lastFrom,
+							.target = std::ref(*dummy),
+						});
 					}
 					lastFrom = dummy;
 				}
 				// We did insert a dummy (because nexts == {}), add the final
 				// connection to the "to"
 				if (lastFrom->nexts.size() == 0)
-					lastFrom->nexts.push_back({.target = to, .track = 0});
+					lastFrom->nexts.push_back({
+						.source = *lastFrom,
+						.target = to,
+					});
 			}
 			else // Previous layer
 			{
@@ -346,14 +412,20 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					}
 					else
 					{
-						lastFrom->nexts.push_back({std::ref(*dummy), 0});
+						lastFrom->nexts.push_back({
+							.source = *lastFrom,
+							.target = std::ref(*dummy),
+						});
 					}
 					lastFrom = dummy;
 				}
 				// We did insert a dummy (because nexts == {}), add the final
 				// connection to the "to"
 				if (lastFrom->nexts.size() == 0)
-					lastFrom->nexts.push_back({.target = to, .track = 0});
+					lastFrom->nexts.push_back({
+						.source = *lastFrom,
+						.target = to,
+					});
 			}
 		}
 	}
@@ -366,15 +438,39 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		layers.at(*node->layer).nodes.push_back(*node);
 	}
 
+	// Assign tracks
+	for (LayerInfo &layer : layers)
+	{
+		unsigned overTracks = 0;
+		unsigned underTracks = 0;
+		for (Node &fromNode : layer.nodes)
+		{
+			for (EdgeInfo &edge : fromNode.nexts)
+			{
+				if (edge.needsOverTrack())
+				{
+					edge.track = overTracks++;
+				}
+				else
+				{
+					edge.track = underTracks++;
+				}
+			}
+		}
+		assert(overTracks == layer.overTracks());
+		assert(underTracks == layer.underTracks());
+	}
+
 	// Place vertically
 	const unsigned LAYER_GAP = 20;
 	for (Node *node : nodes)
 	{
-		unsigned yPos = 0;
+		qreal yPos = 0;
 		for (unsigned i = 0; i < *node->layer; ++i)
 		{
 			yPos += layers[i].layerHeight() + LAYER_GAP;
 		}
+		yPos += layers[*node->layer].overTrackAreaHeight();
 		node->setY(yPos);
 	}
 
@@ -390,19 +486,6 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		}
 	}
 
-	// Assign tracks
-	for (LayerInfo &layer : layers)
-	{
-		unsigned tracks = 0;
-		for (Node &node : layer.nodes)
-		{
-			for (EdgeInfo &edge : node.nexts)
-			{
-				edge.track = tracks++;
-			}
-		}
-	}
-
 	// Draw edges
 	for (const Node *fromNode : nodes)
 	{
@@ -411,28 +494,16 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 			const Node &toNode = nextEdge.target;
 			const unsigned track = nextEdge.track;
 			const LayerInfo &fromLayer = layers.at(*fromNode->layer);
-			const LayerInfo &toLayer = layers.at(*toNode.layer);
 			const QPointF fromPos = fromNode->pos();
 			const QSizeF fromSize = fromNode->size();
 			const QPointF toPos = toNode.pos();
 			const QSizeF toSize = toNode.size();
-			const bool fromIsDummy = dynamic_cast<const DummyNode *>(fromNode);
-			const bool toIsDummy = dynamic_cast<const DummyNode *>(&toNode);
 			const QPointF fromTop = fromPos + QPointF(fromSize.width() / 2, 0);
 			const QPointF fromBottom = fromTop + QPointF(0, fromSize.height());
 			const QPointF toTop = toPos + QPointF(toSize.width() / 2, 0);
 			const QPointF toBottom = toTop + QPointF(0, toSize.height());
 
 			QPainterPath path;
-			// if (fromNode == toNode)
-			// {
-			// 	// Self-loop: curve out to the right and back
-			// 	qreal w = fromSize.width();
-			// 	qreal h = fromSize.height();
-			// 	QPointF rightEdge = fromPos + QPointF(w + 40, h / 2);
-			// 	path.cubicTo(rightEdge + QPointF(0, h / 2),
-			// 				 rightEdge + QPointF(0, -h / 2), toPt);
-			// }
 			if (*fromNode->layer < *toNode.layer)
 			{
 				// Downwards
@@ -448,6 +519,21 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				// Down to the target
 				path.lineTo(toTop);
 			}
+			else if (*fromNode->layer > *toNode.layer)
+			{
+				assert(dynamic_cast<const DummyNode *>(fromNode));
+				// Upwards (to previous layer)
+				QPointF pt = fromTop;
+				path.moveTo(pt);
+				// Up to the track section
+				pt.ry() = fromPos.y() - TRACK_HEIGHT * (1 + track);
+				path.lineTo(pt);
+				// Sideways to the target
+				pt.rx() = toBottom.x();
+				path.lineTo(pt);
+				// Into the target (from the bottom)
+				path.lineTo(toBottom);
+			}
 			else if (*fromNode->layer == *toNode.layer)
 			{
 				// Same layer
@@ -456,8 +542,8 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					assert(!dynamic_cast<const DummyNode *>(&toNode));
 					QPointF pt = fromTop;
 					path.moveTo(pt);
-					// Up a bit (needs a proper track)
-					pt.ry() -= 10;
+					// Up to the track section
+					pt.ry() = fromPos.y() - TRACK_HEIGHT * (1 + track);
 					path.lineTo(pt);
 					// Sideways to the target
 					pt.rx() = toTop.x();
@@ -480,21 +566,6 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					// Into the target (from the bottom)
 					path.lineTo(toBottom);
 				}
-			}
-			else if (*fromNode->layer > *toNode.layer)
-			{
-				assert(dynamic_cast<const DummyNode *>(fromNode));
-				// Upwards (to previous layer)
-				QPointF pt = fromTop;
-				path.moveTo(pt);
-				// Up a bit (should have a proper track)
-				pt.ry() -= 10;
-				path.lineTo(pt);
-				// Sideways to the target
-				pt.rx() = toBottom.x();
-				path.lineTo(pt);
-				// Into the target (from the bottom)
-				path.lineTo(toBottom);
 			}
 			else
 			{
