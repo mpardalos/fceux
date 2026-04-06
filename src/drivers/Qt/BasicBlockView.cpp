@@ -254,10 +254,10 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 	// Make nodes
 	for (const auto &[addr, bb] : bbSet.basicBlocks)
 	{
-		BasicBlockItem *bbItem = new BasicBlockItem(bb);
+		BasicBlockNode *bbItem = new BasicBlockNode(bb);
 		scene_.addItem(bbItem);
-		nodes.push_back({&bb, bbItem});
-		addrToNode.insert({addr, &nodes.back()});
+		nodes.push_back(bbItem);
+		addrToNode.insert({addr, bbItem});
 	}
 
 	// Add edges
@@ -272,38 +272,73 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 	// Pick layers
 	computeLayers(*addrToNode.at(bbSet.entry));
 
-	// Decide layer heights
-	for (const Node &node : nodes)
+	// Add dummy nodes
+	for (size_t fromIdx = 0; fromIdx < nodes.size(); ++fromIdx)
 	{
-		assert(node.layer); // All layers should be decided at this point
-		const unsigned height =
-			node.widget ? node.widget->size().height() : 0;
-		if (layerHeights.count(*node.layer) == 0)
+		Node *from = nodes[fromIdx];
+		for (size_t nextIdx = 0; nextIdx < from->nexts.size(); ++nextIdx)
 		{
-			layerHeights.insert({*node.layer, height});
+			Node *to = from->nexts[nextIdx];
+			if (std::abs(static_cast<int>(*to->layer) -
+						 static_cast<int>(*from->layer)) <= 1)
+				continue;
+
+			Node *lastFrom = from;
+			int layerDirection = *from->layer < *to->layer ? 1 : -1;
+			for (int layer = *from->layer + layerDirection; layer != *to->layer;
+				 layer += layerDirection)
+			{
+				DummyNode *dummy = new DummyNode(QPointF(0, 0));
+				nodes.push_back(dummy);
+				scene_.addItem(dummy);
+				dummy->layer = layer;
+				if (lastFrom->nexts.size() > 0)
+				{
+					// It is the starting node, and we should swap the
+					// "next" we are currently looking at
+					lastFrom->nexts[nextIdx] = dummy;
+				}
+				else
+				{
+					lastFrom->nexts.push_back(dummy);
+				}
+				lastFrom = dummy;
+			}
+			// We did insert a dummy (because nexts == {}), add the final connection to the "to"
+			if (lastFrom->nexts.size() == 0) lastFrom->nexts.push_back(to);
 		}
-		layerHeights[*node.layer] =
-			std::max(layerHeights[*node.layer], height);
+	}
+
+	// Decide layer heights
+	for (const Node *node : nodes)
+	{
+		assert(node->layer); // All layers should be decided at this point
+		const unsigned height = node->size().height();
+		if (layerHeights.count(*node->layer) == 0)
+		{
+			layerHeights.insert({*node->layer, height});
+		}
+		layerHeights[*node->layer] =
+			std::max(layerHeights[*node->layer], height);
 	}
 
 	// Group blocks by layer
 	std::map<unsigned, std::vector<Node *>> layers;
-	for (Node &node : nodes)
+	for (Node *node : nodes)
 	{
-		layers[*node.layer].push_back(&node);
+		layers[*node->layer].push_back(node);
 	}
 
 	// Place vertically
 	const unsigned LAYER_GAP = 20;
-	for (Node &node : nodes)
+	for (Node *node : nodes)
 	{
-		if (!node.widget) continue;
 		unsigned yPos = 0;
-		for (unsigned i = 0; i < *node.layer; ++i)
+		for (unsigned i = 0; i < *node->layer; ++i)
 		{
 			yPos += layerHeights[i] + LAYER_GAP;
 		}
-		node.widget->setY(yPos);
+		node->setY(yPos);
 	}
 
 	// Place horizontally: space out blocks within each layer
@@ -313,37 +348,32 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		qreal x = 0;
 		for (Node *node : layerNodes)
 		{
-			if (!node->widget) continue;
-			node->widget->setX(x);
-			x += node->widget->size().width() + BLOCK_GAP;
+			node->setX(x);
+			x += node->size().width() + BLOCK_GAP;
 		}
 	}
 
 	// Draw edges
-	for (const Node &fromNode : nodes)
+	for (const Node *fromNode : nodes)
 	{
-		if (!fromNode.widget) continue;
-		for (const Node *toNode : fromNode.nexts)
+		for (const Node *toNode : fromNode->nexts)
 		{
-			if (!toNode->widget) continue;
-
-			BasicBlockItem &fromItem = *fromNode.widget;
-			BasicBlockItem &toItem = *toNode->widget;
+			QPointF fromPos = fromNode->pos();
+			QSizeF fromSize = fromNode->size();
+			QPointF toPos = toNode->pos();
+			QSizeF toSize = toNode->size();
 
 			QPointF fromPt =
-				fromItem.pos() +
-				QPointF(fromItem.size().width() / 2, fromItem.size().height());
-			QPointF toPt =
-				toItem.pos() + QPointF(toItem.size().width() / 2, 0);
+				fromPos + QPointF(fromSize.width() / 2, fromSize.height());
+			QPointF toPt = toPos + QPointF(toSize.width() / 2, 0);
 
 			QPainterPath path(fromPt);
-			if (&fromItem == &toItem)
+			if (fromNode == toNode)
 			{
 				// Self-loop: curve out to the right and back
-				qreal w = fromItem.size().width();
-				qreal h = fromItem.size().height();
-				QPointF rightEdge =
-					fromItem.pos() + QPointF(w + 40, h / 2);
+				qreal w = fromSize.width();
+				qreal h = fromSize.height();
+				QPointF rightEdge = fromPos + QPointF(w + 40, h / 2);
 				path.cubicTo(rightEdge + QPointF(0, h / 2),
 							 rightEdge + QPointF(0, -h / 2), toPt);
 			}
@@ -427,7 +457,8 @@ void BasicBlockView_t::closeWindow(void)
 	deleteLater();
 }
 //----------------------------------------------------------------------------
-BasicBlockItem::BasicBlockItem(const BasicBlock &bb, QGraphicsItem *parent)
+GraphView::BasicBlockNode::BasicBlockNode(const BasicBlock &bb,
+										  QGraphicsItem *parent)
 	: QGraphicsProxyWidget(parent), bb_(bb)
 {
 	std::ostringstream oss;
