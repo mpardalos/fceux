@@ -120,8 +120,8 @@ struct Instruction
 		case 0xD0: // BNE (Branch on Not Equal)
 		case 0xF0: // BEQ (Branch on EQual)
 			// Branch is relative to next address, and signed
-			result.push_back(address + size() + static_cast<int8>(opcode[1]));
 			result.push_back(address + size());
+			result.push_back(address + size() + static_cast<int8>(opcode[1]));
 			break;
 		default: // Non-jumps
 			result.push_back(address + size());
