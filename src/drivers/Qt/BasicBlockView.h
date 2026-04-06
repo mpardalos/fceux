@@ -54,9 +54,16 @@ public:
 	GraphView(const BasicBlockSet &bbSet, QWidget *parent = nullptr);
 
 private:
+	struct Node;
+	struct EdgeInfo
+	{
+		std::reference_wrapper<Node> target; // reference_wrapper so that it is rebindable
+		unsigned track;
+	};
+
 	struct Node
 	{
-		std::vector<Node *> nexts;
+		std::vector<EdgeInfo> nexts;
 		std::optional<unsigned> layer = std::nullopt;
 
 		virtual QGraphicsItem &asQGraphicsItem() = 0;
@@ -100,10 +107,19 @@ private:
 		void setY(qreal y) override { QGraphicsRectItem::setY(y); }
 	};
 
-	QGraphicsScene scene_;
-	std::vector<Node*> nodes;
-	std::map<uint16, Node *> addrToNode;
-	std::map<uint16, unsigned> layerHeights;
+	struct LayerInfo
+	{
+		std::vector<std::reference_wrapper<Node>> nodes;
+		unsigned tracks() const;
+		qreal nodeAreaHeight() const;
+		qreal trackAreaHeight() const;
+		qreal layerHeight() const;
+	};
 
-	void computeLayers(Node &node, unsigned layer = 0);
+	QGraphicsScene scene_;
+	std::vector<Node *> nodes;
+	std::vector<LayerInfo> layers;
+	std::map<uint16, Node *> addrToNode;
+
+	unsigned computeLayers(Node &node, unsigned layer = 0);
 };

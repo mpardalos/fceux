@@ -63,6 +63,8 @@
 #include "Qt/fceuWrapper.h"
 #include "Qt/keyscan.h"
 
+constexpr int TRACK_HEIGHT = 10;
+
 struct Instruction
 {
 	uint16 address;
@@ -205,7 +207,6 @@ struct BasicBlockSet
 		{
 			const uint16 addr = addresses.top();
 			addresses.pop();
-			std::cerr << "Process " << std::hex << addr << "\n";
 			const BasicBlock bb = BasicBlock::fromAddress(addr);
 			bbSet.basicBlocks.insert({addr, bb});
 			for (uint16 nextAddr : bb.next())
@@ -220,29 +221,48 @@ struct BasicBlockSet
 	}
 };
 
-std::ostream &operator<<(std::ostream &o, const BasicBlockSet &bbSet)
+qreal GraphView::LayerInfo::nodeAreaHeight() const
 {
-	int limit = 4;
-	for (auto [addr, bb] : bbSet.basicBlocks)
+	qreal height = 0;
+	for (const Node &node : nodes)
 	{
-		if (limit <= 0) break;
-		o << bb << "\n";
-		limit -= 1;
+		height = std::max(height, node.size().height());
 	}
-	return o;
+	return height;
 }
 
-void GraphView::computeLayers(Node &node, unsigned layer)
+qreal GraphView::LayerInfo::trackAreaHeight() const
+{
+	qreal height = 0;
+	for (const Node &node : nodes)
+	{
+		for (const EdgeInfo &edge : node.nexts)
+		{
+			height += TRACK_HEIGHT;
+		}
+	}
+	return height;
+}
+
+qreal GraphView::LayerInfo::layerHeight() const
+{
+	return nodeAreaHeight() + trackAreaHeight();
+}
+
+// Returns max layer assigned
+unsigned GraphView::computeLayers(Node &node, unsigned layer)
 {
 	if (node.layer)
 	{
-		return;
+		return *node.layer;
 	}
 	node.layer = layer;
-	for (Node *next : node.nexts)
+	unsigned maxLayer = layer;
+	for (const EdgeInfo edge : node.nexts)
 	{
-		computeLayers(*next, layer + 1);
+		maxLayer = std::max(maxLayer, computeLayers(edge.target, layer + 1));
 	}
+	return maxLayer;
 }
 
 GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
@@ -265,68 +285,85 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 	{
 		for (uint16 nextAddr : bb.next())
 		{
-			addrToNode.at(addr)->nexts.push_back(addrToNode.at(nextAddr));
+			addrToNode.at(addr)->nexts.push_back(
+				EdgeInfo{.target = *addrToNode.at(nextAddr), .track = 0});
 		}
 	}
 
 	// Pick layers
-	computeLayers(*addrToNode.at(bbSet.entry));
+	unsigned maxLayer = computeLayers(*addrToNode.at(bbSet.entry));
 
 	// Add dummy nodes
 	for (size_t fromIdx = 0; fromIdx < nodes.size(); ++fromIdx)
 	{
 		Node *from = nodes[fromIdx];
+		if (dynamic_cast<DummyNode *>(from)) continue;
 		for (size_t nextIdx = 0; nextIdx < from->nexts.size(); ++nextIdx)
 		{
-			Node *to = from->nexts[nextIdx];
-			if (std::abs(static_cast<int>(*to->layer) -
-						 static_cast<int>(*from->layer)) <= 1)
-				continue;
+			Node &to = from->nexts[nextIdx].target;
+			if (dynamic_cast<DummyNode *>(&to)) continue;
 
 			Node *lastFrom = from;
-			int layerDirection = *from->layer < *to->layer ? 1 : -1;
-			for (int layer = *from->layer + layerDirection; layer != *to->layer;
-				 layer += layerDirection)
+			if (*from->layer < *to.layer)
 			{
-				DummyNode *dummy = new DummyNode(QPointF(0, 0));
-				nodes.push_back(dummy);
-				scene_.addItem(dummy);
-				dummy->layer = layer;
-				if (lastFrom->nexts.size() > 0)
+				for (int layer = *from->layer + 1; layer < *to.layer; ++layer)
 				{
-					// It is the starting node, and we should swap the
-					// "next" we are currently looking at
-					lastFrom->nexts[nextIdx] = dummy;
+					DummyNode *dummy = new DummyNode(QPointF(0, 0));
+					nodes.push_back(dummy);
+					scene_.addItem(dummy);
+					dummy->layer = layer;
+					if (lastFrom->nexts.size() > 0)
+					{
+						// It is the starting node, and we should swap the
+						// "next" we are currently looking at
+						lastFrom->nexts[nextIdx].target = std::ref(*dummy);
+					}
+					else
+					{
+						lastFrom->nexts.push_back({std::ref(*dummy), 0});
+					}
+					lastFrom = dummy;
 				}
-				else
-				{
-					lastFrom->nexts.push_back(dummy);
-				}
-				lastFrom = dummy;
+				// We did insert a dummy (because nexts == {}), add the final
+				// connection to the "to"
+				if (lastFrom->nexts.size() == 0)
+					lastFrom->nexts.push_back({.target = to, .track = 0});
 			}
-			// We did insert a dummy (because nexts == {}), add the final connection to the "to"
-			if (lastFrom->nexts.size() == 0) lastFrom->nexts.push_back(to);
+			else // Previous layer
+			{
+				// Here we add dummies on the start and end layers too
+				for (int layer = *from->layer; layer >= *to.layer; --layer)
+				{
+					DummyNode *dummy = new DummyNode(QPointF(0, 0));
+					nodes.push_back(dummy);
+					scene_.addItem(dummy);
+					dummy->layer = layer;
+					if (lastFrom->nexts.size() > 0)
+					{
+						// It is the starting node, and we should swap the
+						// "next" we are currently looking at
+						lastFrom->nexts[nextIdx].target = std::ref(*dummy);
+					}
+					else
+					{
+						lastFrom->nexts.push_back({std::ref(*dummy), 0});
+					}
+					lastFrom = dummy;
+				}
+				// We did insert a dummy (because nexts == {}), add the final
+				// connection to the "to"
+				if (lastFrom->nexts.size() == 0)
+					lastFrom->nexts.push_back({.target = to, .track = 0});
+			}
 		}
 	}
 
-	// Decide layer heights
-	for (const Node *node : nodes)
-	{
-		assert(node->layer); // All layers should be decided at this point
-		const unsigned height = node->size().height();
-		if (layerHeights.count(*node->layer) == 0)
-		{
-			layerHeights.insert({*node->layer, height});
-		}
-		layerHeights[*node->layer] =
-			std::max(layerHeights[*node->layer], height);
-	}
-
-	// Group blocks by layer
-	std::map<unsigned, std::vector<Node *>> layers;
+	// Create layers
+	layers.resize(maxLayer + 1);
 	for (Node *node : nodes)
 	{
-		layers[*node->layer].push_back(node);
+		assert(node->layer); // All layers should be decided at this point
+		layers.at(*node->layer).nodes.push_back(*node);
 	}
 
 	// Place vertically
@@ -336,53 +373,139 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		unsigned yPos = 0;
 		for (unsigned i = 0; i < *node->layer; ++i)
 		{
-			yPos += layerHeights[i] + LAYER_GAP;
+			yPos += layers[i].layerHeight() + LAYER_GAP;
 		}
 		node->setY(yPos);
 	}
 
 	// Place horizontally: space out blocks within each layer
 	const unsigned BLOCK_GAP = 20;
-	for (auto &[layer, layerNodes] : layers)
+	for (const LayerInfo &layer : layers)
 	{
 		qreal x = 0;
-		for (Node *node : layerNodes)
+		for (Node &node : layer.nodes)
 		{
-			node->setX(x);
-			x += node->size().width() + BLOCK_GAP;
+			node.setX(x);
+			x += node.size().width() + BLOCK_GAP;
+		}
+	}
+
+	// Assign tracks
+	for (LayerInfo &layer : layers)
+	{
+		unsigned tracks = 0;
+		for (Node &node : layer.nodes)
+		{
+			for (EdgeInfo &edge : node.nexts)
+			{
+				edge.track = tracks++;
+			}
 		}
 	}
 
 	// Draw edges
 	for (const Node *fromNode : nodes)
 	{
-		for (const Node *toNode : fromNode->nexts)
+		for (const EdgeInfo &nextEdge : fromNode->nexts)
 		{
-			QPointF fromPos = fromNode->pos();
-			QSizeF fromSize = fromNode->size();
-			QPointF toPos = toNode->pos();
-			QSizeF toSize = toNode->size();
+			const Node &toNode = nextEdge.target;
+			const unsigned track = nextEdge.track;
+			const LayerInfo &fromLayer = layers.at(*fromNode->layer);
+			const LayerInfo &toLayer = layers.at(*toNode.layer);
+			const QPointF fromPos = fromNode->pos();
+			const QSizeF fromSize = fromNode->size();
+			const QPointF toPos = toNode.pos();
+			const QSizeF toSize = toNode.size();
+			const bool fromIsDummy = dynamic_cast<const DummyNode *>(fromNode);
+			const bool toIsDummy = dynamic_cast<const DummyNode *>(&toNode);
+			const QPointF fromTop = fromPos + QPointF(fromSize.width() / 2, 0);
+			const QPointF fromBottom = fromTop + QPointF(0, fromSize.height());
+			const QPointF toTop = toPos + QPointF(toSize.width() / 2, 0);
+			const QPointF toBottom = toTop + QPointF(0, toSize.height());
 
-			QPointF fromPt =
-				fromPos + QPointF(fromSize.width() / 2, fromSize.height());
-			QPointF toPt = toPos + QPointF(toSize.width() / 2, 0);
-
-			QPainterPath path(fromPt);
-			if (fromNode == toNode)
+			QPainterPath path;
+			// if (fromNode == toNode)
+			// {
+			// 	// Self-loop: curve out to the right and back
+			// 	qreal w = fromSize.width();
+			// 	qreal h = fromSize.height();
+			// 	QPointF rightEdge = fromPos + QPointF(w + 40, h / 2);
+			// 	path.cubicTo(rightEdge + QPointF(0, h / 2),
+			// 				 rightEdge + QPointF(0, -h / 2), toPt);
+			// }
+			if (*fromNode->layer < *toNode.layer)
 			{
-				// Self-loop: curve out to the right and back
-				qreal w = fromSize.width();
-				qreal h = fromSize.height();
-				QPointF rightEdge = fromPos + QPointF(w + 40, h / 2);
-				path.cubicTo(rightEdge + QPointF(0, h / 2),
-							 rightEdge + QPointF(0, -h / 2), toPt);
+				// Downwards
+				QPointF pt = fromBottom;
+				path.moveTo(pt);
+				// Down to the track section
+				pt.ry() = fromPos.y() + fromLayer.nodeAreaHeight() +
+						  TRACK_HEIGHT * (1 + track);
+				path.lineTo(pt);
+				// Sideways to the target
+				pt.rx() = toTop.x();
+				path.lineTo(pt);
+				// Down to the target
+				path.lineTo(toTop);
+			}
+			else if (*fromNode->layer == *toNode.layer)
+			{
+				// Same layer
+				if (dynamic_cast<const DummyNode *>(fromNode))
+				{
+					assert(!dynamic_cast<const DummyNode *>(&toNode));
+					QPointF pt = fromTop;
+					path.moveTo(pt);
+					// Up a bit (needs a proper track)
+					pt.ry() -= 10;
+					path.lineTo(pt);
+					// Sideways to the target
+					pt.rx() = toTop.x();
+					path.lineTo(pt);
+					// Into the target (from the top)
+					path.lineTo(toTop);
+				}
+				else
+				{
+					assert(dynamic_cast<const DummyNode *>(&toNode));
+					QPointF pt = fromBottom;
+					path.moveTo(pt);
+					// Down to the track section
+					pt.ry() = fromPos.y() + fromLayer.nodeAreaHeight() +
+							  TRACK_HEIGHT * (1 + track);
+					path.lineTo(pt);
+					// Sideways to the target
+					pt.rx() = toBottom.x();
+					path.lineTo(pt);
+					// Into the target (from the bottom)
+					path.lineTo(toBottom);
+				}
+			}
+			else if (*fromNode->layer > *toNode.layer)
+			{
+				assert(dynamic_cast<const DummyNode *>(fromNode));
+				// Upwards (to previous layer)
+				QPointF pt = fromTop;
+				path.moveTo(pt);
+				// Up a bit (should have a proper track)
+				pt.ry() -= 10;
+				path.lineTo(pt);
+				// Sideways to the target
+				pt.rx() = toBottom.x();
+				path.lineTo(pt);
+				// Into the target (from the bottom)
+				path.lineTo(toBottom);
 			}
 			else
 			{
-				path.lineTo(toPt);
+				// We have inserted dummy nodes to break layer crossings, so
+				// these should be the only cases
+				assert(0 && "Unreachable");
 			}
 
-			auto *pathItem = scene_.addPath(path, QPen(Qt::black, 2));
+			auto *pathItem = scene_.addPath(
+				path,
+				QPen(fromNode->layer < toNode.layer ? Qt::black : Qt::red, 2));
 			pathItem->setZValue(10);
 		}
 	}
@@ -425,8 +548,6 @@ BasicBlockView_t::BasicBlockView_t(QWidget *parent)
 	basicBlockViewWin = this;
 
 	restoreGeometry(settings.value("basicBlockView/geometry").toByteArray());
-
-	std::cout << bbs << std::endl;
 }
 //----------------------------------------------------------------------------
 BasicBlockView_t::~BasicBlockView_t(void)
