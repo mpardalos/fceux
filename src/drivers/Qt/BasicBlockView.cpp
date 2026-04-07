@@ -66,7 +66,8 @@
 
 constexpr int TRACK_HEIGHT = 10;
 
-static QPainterPath makeManhattanPath(const std::vector<QPointF> &points, qreal radius = 10.0)
+static QPainterPath makeManhattanPath(const std::vector<QPointF> &points,
+                                      qreal radius = 10.0)
 {
 	QPainterPath path;
 	if (points.empty()) return path;
@@ -96,11 +97,14 @@ static QPainterPath makeManhattanPath(const std::vector<QPointF> &points, qreal 
 			QPointF toCurr = curr - prev;
 			QPointF toNext = next - curr;
 
-			qreal distToCurr = std::sqrt(toCurr.x() * toCurr.x() + toCurr.y() * toCurr.y());
-			qreal distToNext = std::sqrt(toNext.x() * toNext.x() + toNext.y() * toNext.y());
+			qreal distToCurr =
+				std::sqrt(toCurr.x() * toCurr.x() + toCurr.y() * toCurr.y());
+			qreal distToNext =
+				std::sqrt(toNext.x() * toNext.x() + toNext.y() * toNext.y());
 
 			// Limit radius to half the shorter segment
-			qreal actualRadius = std::min(radius, std::min(distToCurr, distToNext) / 2.0);
+			qreal actualRadius =
+				std::min(radius, std::min(distToCurr, distToNext) / 2.0);
 
 			// Draw line to point before curve
 			QPointF beforeCurve = curr - (toCurr / distToCurr) * actualRadius;
@@ -531,10 +535,10 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 	}
 
 	// Remove merged nodes from the nodes vector
-	nodes.erase(
-		std::remove_if(nodes.begin(), nodes.end(),
-					   [&nodesToRemove](Node *n) { return nodesToRemove.count(n) > 0; }),
-		nodes.end());
+	nodes.erase(std::remove_if(nodes.begin(), nodes.end(),
+	                           [&nodesToRemove](Node *n)
+	                           { return nodesToRemove.count(n) > 0; }),
+	            nodes.end());
 
 	// Delete the removed nodes
 	for (Node *node : nodesToRemove)
@@ -697,7 +701,7 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 			{
 				// Downwards
 				const qreal trackY = fromPos.y() + fromLayer.nodeAreaHeight() +
-									 TRACK_HEIGHT * (1 + track);
+				                     TRACK_HEIGHT * (1 + track);
 				path = makeManhattanPath({
 					fromBottom,
 					{fromBottom.x(), trackY},
@@ -723,7 +727,8 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				if (dynamic_cast<const DummyNode *>(fromNode))
 				{
 					assert(!dynamic_cast<const DummyNode *>(&toNode));
-					const qreal trackY = fromPos.y() - TRACK_HEIGHT * (1 + track);
+					const qreal trackY =
+						fromPos.y() - TRACK_HEIGHT * (1 + track);
 					path = makeManhattanPath({
 						fromTop,
 						{fromTop.x(), trackY},
@@ -734,8 +739,9 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				else
 				{
 					assert(dynamic_cast<const DummyNode *>(&toNode));
-					const qreal trackY = fromPos.y() + fromLayer.nodeAreaHeight() +
-										 TRACK_HEIGHT * (1 + track);
+					const qreal trackY = fromPos.y() +
+					                     fromLayer.nodeAreaHeight() +
+					                     TRACK_HEIGHT * (1 + track);
 					path = makeManhattanPath({
 						fromBottom,
 						{fromBottom.x(), trackY},
@@ -827,7 +833,7 @@ void BasicBlockView_t::closeWindow(void)
 }
 //----------------------------------------------------------------------------
 GraphView::BasicBlockNode::BasicBlockNode(const BasicBlock &bb,
-										  QGraphicsItem *parent)
+                                          QGraphicsItem *parent)
 	: QGraphicsProxyWidget(parent), bb_(bb)
 {
 	std::ostringstream oss;
