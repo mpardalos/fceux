@@ -53,10 +53,8 @@
 #include "../../fceu.h"
 
 #include "../../asm.h"
-#include "../../cart.h"
 #include "../../debug.h"
 #include "../../fds.h"
-#include "../../ines.h"
 #include "../../palette.h"
 #include "../../ppu.h"
 #include "../../x6502.h"
@@ -275,21 +273,21 @@ struct BasicBlockSet
 	}
 };
 
-unsigned GraphView::LayerInfo::overTracks() const { return overTrackCount; }
+unsigned LayerInfo::overTracks() const { return overTrackCount; }
 
-qreal GraphView::LayerInfo::overTrackAreaHeight() const
+qreal LayerInfo::overTrackAreaHeight() const
 {
 	return TRACK_HEIGHT * overTracks();
 }
 
-unsigned GraphView::LayerInfo::underTracks() const { return underTrackCount; }
+unsigned LayerInfo::underTracks() const { return underTrackCount; }
 
-qreal GraphView::LayerInfo::underTrackAreaHeight() const
+qreal LayerInfo::underTrackAreaHeight() const
 {
 	return TRACK_HEIGHT * underTracks();
 }
 
-qreal GraphView::LayerInfo::nodeAreaHeight() const
+qreal LayerInfo::nodeAreaHeight() const
 {
 	qreal height = 0;
 	for (const Node &node : nodes)
@@ -299,12 +297,12 @@ qreal GraphView::LayerInfo::nodeAreaHeight() const
 	return height;
 }
 
-qreal GraphView::LayerInfo::layerHeight() const
+qreal LayerInfo::layerHeight() const
 {
 	return overTrackAreaHeight() + nodeAreaHeight() + underTrackAreaHeight();
 }
 
-bool GraphView::EdgeInfo::needsOverTrack() const
+bool EdgeInfo::needsOverTrack() const
 {
 	if (source.layer < target.get().layer)
 	{
@@ -329,7 +327,7 @@ bool GraphView::EdgeInfo::needsOverTrack() const
 	}
 }
 
-bool GraphView::EdgeInfo::needsUnderTrack() const { return !needsOverTrack(); }
+bool EdgeInfo::needsUnderTrack() const { return !needsOverTrack(); }
 
 // Returns max layer assigned
 unsigned GraphView::computeLayers(Node &node, unsigned layer)
@@ -877,8 +875,7 @@ void BasicBlockView_t::closeWindow(void)
 	deleteLater();
 }
 //----------------------------------------------------------------------------
-GraphView::BasicBlockNode::BasicBlockNode(const BasicBlock &bb,
-                                          QGraphicsItem *parent)
+BasicBlockNode::BasicBlockNode(const BasicBlock &bb, QGraphicsItem *parent)
 	: QGraphicsProxyWidget(parent), bb_(bb)
 {
 	std::ostringstream oss;
@@ -888,6 +885,44 @@ GraphView::BasicBlockNode::BasicBlockNode(const BasicBlock &bb,
 	QLabel *label = new QLabel(text);
 	label->setFont(QFont("monospace"));
 	label->setContentsMargins(6, 4, 6, 4);
+	// clang-format off
+	label->setStyleSheet(
+		"background-color: white;"
+		"padding: 2px;"
+		"border: 2px solid #ccc;"
+	);
+	// clang-format on
 
 	setWidget(label);
+	setAcceptHoverEvents(true);
+}
+
+void BasicBlockNode::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
+{
+	if (QLabel *label = qobject_cast<QLabel *>(widget()))
+	{
+		// clang-format off
+		label->setStyleSheet(
+			"background-color: #e3f2fd;"
+			"padding: 2px;"
+			"border: 2px solid #2196f3;"
+		);
+		// clang-format on
+	}
+	QGraphicsProxyWidget::hoverEnterEvent(event);
+}
+
+void BasicBlockNode::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
+{
+	if (QLabel *label = qobject_cast<QLabel *>(widget()))
+	{
+		// clang-format off
+		label->setStyleSheet(
+			"background-color: white;"
+			"padding: 2px;"
+			"border: 2px solid #ccc;"
+		);
+		// clang-format on
+	}
+	QGraphicsProxyWidget::hoverLeaveEvent(event);
 }
