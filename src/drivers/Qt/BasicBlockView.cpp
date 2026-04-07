@@ -23,6 +23,7 @@
 #include <iostream>
 #include <qgraphicsview.h>
 #include <qnamespace.h>
+#include <set>
 #include <stack>
 #include <stdio.h>
 #include <stdlib.h>
@@ -478,6 +479,67 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					});
 			}
 		}
+	}
+
+	// Merge dummy nodes that share the same target
+	std::set<Node *> nodesToRemove;
+	for (unsigned layer = 0; layer <= maxLayer; ++layer)
+	{
+		// Build a map from target to dummy nodes pointing to it
+		std::map<Node *, std::vector<DummyNode *>> targetToDummies;
+		for (Node *node : nodes)
+		{
+			if (nodesToRemove.count(node)) continue;
+			DummyNode *dummy = dynamic_cast<DummyNode *>(node);
+			if (!dummy || !dummy->layer || *dummy->layer != layer) continue;
+			if (dummy->nexts.size() == 1)
+			{
+				Node &target = dummy->nexts[0].target;
+				targetToDummies[&target].push_back(dummy);
+			}
+		}
+
+		// Merge dummies pointing to the same target
+		for (auto &[target, dummies] : targetToDummies)
+		{
+			if (dummies.size() <= 1) continue;
+
+			// Keep the first dummy, merge others into it
+			DummyNode *kept = dummies[0];
+			for (size_t i = 1; i < dummies.size(); ++i)
+			{
+				DummyNode *toRemove = dummies[i];
+
+				// Redirect all incoming edges to point to the kept dummy
+				for (Node *node : nodes)
+				{
+					if (nodesToRemove.count(node)) continue;
+					for (EdgeInfo &edge : node->nexts)
+					{
+						if (&edge.target.get() == toRemove)
+						{
+							edge.target = std::ref(*kept);
+						}
+					}
+				}
+
+				// Mark for removal
+				nodesToRemove.insert(toRemove);
+				scene_.removeItem(toRemove);
+			}
+		}
+	}
+
+	// Remove merged nodes from the nodes vector
+	nodes.erase(
+		std::remove_if(nodes.begin(), nodes.end(),
+					   [&nodesToRemove](Node *n) { return nodesToRemove.count(n) > 0; }),
+		nodes.end());
+
+	// Delete the removed nodes
+	for (Node *node : nodesToRemove)
+	{
+		delete node;
 	}
 
 	// Create layers
