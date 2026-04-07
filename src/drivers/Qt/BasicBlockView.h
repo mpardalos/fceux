@@ -117,6 +117,8 @@ private:
 	struct LayerInfo
 	{
 		std::vector<std::reference_wrapper<Node>> nodes;
+		unsigned overTrackCount = 0;
+		unsigned underTrackCount = 0;
 		unsigned overTracks() const;
 		unsigned underTracks() const;
 		qreal nodeAreaHeight() const;

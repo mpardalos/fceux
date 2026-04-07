@@ -275,42 +275,14 @@ struct BasicBlockSet
 	}
 };
 
-unsigned GraphView::LayerInfo::overTracks() const
-{
-	qreal count = 0;
-	for (const Node &node : nodes)
-	{
-		for (const EdgeInfo &edge : node.nexts)
-		{
-			if (edge.needsOverTrack())
-			{
-				count += 1;
-			}
-		}
-	}
-	return count;
-}
+unsigned GraphView::LayerInfo::overTracks() const { return overTrackCount; }
 
 qreal GraphView::LayerInfo::overTrackAreaHeight() const
 {
 	return TRACK_HEIGHT * overTracks();
 }
 
-unsigned GraphView::LayerInfo::underTracks() const
-{
-	unsigned count = 0;
-	for (const Node &node : nodes)
-	{
-		for (const EdgeInfo &edge : node.nexts)
-		{
-			if (edge.needsUnderTrack())
-			{
-				count += 1;
-			}
-		}
-	}
-	return count;
-}
+unsigned GraphView::LayerInfo::underTracks() const { return underTrackCount; }
 
 qreal GraphView::LayerInfo::underTrackAreaHeight() const
 {
@@ -554,42 +526,6 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		layers.at(*node->layer).nodes.push_back(*node);
 	}
 
-	// Assign tracks
-	for (LayerInfo &layer : layers)
-	{
-		unsigned overTracks = 0;
-		unsigned underTracks = 0;
-		for (Node &fromNode : layer.nodes)
-		{
-			for (EdgeInfo &edge : fromNode.nexts)
-			{
-				if (edge.needsOverTrack())
-				{
-					edge.track = overTracks++;
-				}
-				else
-				{
-					edge.track = underTracks++;
-				}
-			}
-		}
-		assert(overTracks == layer.overTracks());
-		assert(underTracks == layer.underTracks());
-	}
-
-	// Place vertically
-	const unsigned LAYER_GAP = 20;
-	for (Node *node : nodes)
-	{
-		qreal yPos = 0;
-		for (unsigned i = 0; i < *node->layer; ++i)
-		{
-			yPos += layers[i].layerHeight() + LAYER_GAP;
-		}
-		yPos += layers[*node->layer].overTrackAreaHeight();
-		node->setY(yPos);
-	}
-
 	// Sort horizontally. Downwards dummies on the left, then blocks, then
 	// upwards on the right
 	for (LayerInfo &layer : layers)
@@ -677,6 +613,115 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 			node.setX(x);
 			x += node.size().width() + BLOCK_GAP;
 		}
+	}
+
+	// Assign tracks based on horizontal span overlap
+	// Edges can share a track if their horizontal spans don't intersect
+	// or if they share the same source or target
+	for (LayerInfo &layer : layers)
+	{
+		// Collect edges with their horizontal spans
+		struct EdgeSpan
+		{
+			EdgeInfo *edge;
+			qreal sourceX, targetX, minX, maxX;
+			bool isOver;
+		};
+		std::vector<EdgeSpan> edgeSpans;
+
+		for (Node &fromNode : layer.nodes)
+		{
+			for (EdgeInfo &edge : fromNode.nexts)
+			{
+				const Node &toNode = edge.target.get();
+				qreal fromX = fromNode.pos().x() + fromNode.size().width() / 2;
+				qreal toX = toNode.pos().x() + toNode.size().width() / 2;
+				edgeSpans.push_back({
+					.edge = &edge,
+					.sourceX = fromX,
+					.targetX = toX,
+					.minX = std::min(fromX, toX),
+					.maxX = std::max(fromX, toX),
+					.isOver = edge.needsOverTrack(),
+				});
+			}
+		}
+
+		// Assign tracks using interval scheduling
+		// Track = list of (sourceX, targetX, minX, maxX) tuples for edges on
+		// that track
+		struct TrackInterval
+		{
+			qreal sourceX, targetX, minX, maxX;
+		};
+		std::vector<std::vector<TrackInterval>> overTracksIntervals;
+		std::vector<std::vector<TrackInterval>> underTracksIntervals;
+
+		for (EdgeSpan &span : edgeSpans)
+		{
+			auto &tracks =
+				span.isOver ? overTracksIntervals : underTracksIntervals;
+
+			// Find first track where this edge doesn't conflict
+			bool assigned = false;
+			for (size_t trackIdx = 0; trackIdx < tracks.size(); ++trackIdx)
+			{
+				bool conflicts = false;
+				for (const TrackInterval &existing : tracks[trackIdx])
+				{
+					// Edges can overlap if they share the same source or target
+					bool sameSource =
+						std::abs(span.sourceX - existing.sourceX) < 0.1;
+					bool sameTarget =
+						std::abs(span.targetX - existing.targetX) < 0.1;
+					if (sameSource || sameTarget)
+					{
+						continue; // Same endpoint, allow overlap
+					}
+					// Check if [span.minX, span.maxX] overlaps with
+					// [existing.minX, existing.maxX]
+					if (!(span.maxX < existing.minX ||
+					      span.minX > existing.maxX))
+					{
+						conflicts = true;
+						break;
+					}
+				}
+				if (!conflicts)
+				{
+					span.edge->track = trackIdx;
+					tracks[trackIdx].push_back(
+						{span.sourceX, span.targetX, span.minX, span.maxX});
+					assigned = true;
+					break;
+				}
+			}
+
+			// If no existing track works, create a new one
+			if (!assigned)
+			{
+				span.edge->track = tracks.size();
+				tracks.push_back(
+					{{span.sourceX, span.targetX, span.minX, span.maxX}});
+			}
+		}
+
+		// Cache the track counts
+		layer.overTrackCount = overTracksIntervals.size();
+		layer.underTrackCount = underTracksIntervals.size();
+	}
+
+	// Place vertically (after track assignment so we have correct track counts)
+	const unsigned LAYER_GAP = 20;
+	for (Node *node : nodes)
+	{
+		qreal yPos = 0;
+		for (unsigned i = 0; i < *node->layer; ++i)
+		{
+			yPos += layers[i].layerHeight() + LAYER_GAP;
+		}
+		yPos += layers[*node->layer].overTrackAreaHeight();
+		node->setY(yPos);
 	}
 
 	// Draw edges
