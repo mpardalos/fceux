@@ -101,7 +101,7 @@ protected:
 
 struct DummyNode : public QGraphicsRectItem, public Node
 {
-	DummyNode(QPointF pos) : QGraphicsRectItem(pos.x(), pos.y(), 10, 10) {};
+	DummyNode(QPointF pos);
 	QGraphicsItem &asQGraphicsItem() override { return *this; }
 	const QGraphicsItem &asQGraphicsItem() const override { return *this; }
 	QPointF pos() const override { return QGraphicsRectItem::pos(); }

@@ -62,7 +62,8 @@
 #include "Qt/fceuWrapper.h"
 #include "Qt/keyscan.h"
 
-constexpr int TRACK_HEIGHT = 10;
+static constexpr int TRACK_HEIGHT = 10;
+static constexpr bool DEBUG_GRAPH = false; // Set to true for debugging
 
 static QPainterPath makeManhattanPath(const std::vector<QPointF> &points,
                                       qreal radius = 10.0)
@@ -329,6 +330,17 @@ bool EdgeInfo::needsOverTrack() const
 
 bool EdgeInfo::needsUnderTrack() const { return !needsOverTrack(); }
 
+DummyNode::DummyNode(QPointF pos)
+	: QGraphicsRectItem(pos.x(), pos.y(), DEBUG_GRAPH ? 10 : 0,
+                        DEBUG_GRAPH ? 10 : 0)
+{
+	if (!DEBUG_GRAPH)
+	{
+		setPen(Qt::NoPen);
+		setBrush(Qt::NoBrush);
+	}
+}
+
 // Returns max layer assigned
 unsigned GraphView::computeLayers(Node &node, unsigned layer)
 {
@@ -429,6 +441,11 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 					nodes.push_back(dummy);
 					scene_.addItem(dummy);
 					dummy->layer = layer;
+					if (!DEBUG_GRAPH)
+					{
+						dummy->setPen(Qt::NoPen);
+						dummy->setBrush(Qt::NoBrush);
+					}
 					if (lastFrom->nexts.size() > 0)
 					{
 						// It is the starting node, and we should swap the
@@ -800,9 +817,11 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				assert(0 && "Unreachable");
 			}
 
-			auto *pathItem = scene_.addPath(
-				path,
-				QPen(fromNode->layer < toNode.layer ? Qt::black : Qt::red, 2));
+			const auto color =
+				DEBUG_GRAPH
+					? (fromNode->layer < toNode.layer ? Qt::black : Qt::red)
+					: Qt::black;
+			auto *pathItem = scene_.addPath(path, QPen(color, 2));
 			pathItem->setZValue(10);
 		}
 	}
