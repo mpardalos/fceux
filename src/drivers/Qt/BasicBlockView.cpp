@@ -586,6 +586,83 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		node->setY(yPos);
 	}
 
+	// Sort horizontally. Downwards dummies on the left, then blocks, then
+	// upwards on the right
+	for (LayerInfo &layer : layers)
+	{
+		std::sort(layer.nodes.begin(), layer.nodes.end(),
+		          [](const Node &nodeA, const Node &nodeB)
+		          {
+					  // Categorize nodes: 0 = downwards dummy, 1 = block, 2 =
+			          // upwards dummy
+					  auto getCategory = [](const Node &node) -> int
+					  {
+						  const DummyNode *dummy =
+							  dynamic_cast<const DummyNode *>(&node);
+						  if (!dummy) return 1; // Regular block
+
+						  if (dummy->nexts.empty()) return 1;
+
+						  const Node &target = dummy->nexts[0].target.get();
+						  if (*target.layer > *dummy->layer)
+							  return 0; // Downwards
+						  if (*target.layer < *dummy->layer)
+							  return 2; // Upwards
+						  return 1;     // Same layer (treat as regular)
+					  };
+
+					  int catA = getCategory(nodeA);
+					  int catB = getCategory(nodeB);
+
+					  return catA < catB;
+				  });
+
+		// Second pass: float self-loop dummy to the right of its parent
+		// Assuming only one self-loop per layer
+		std::map<const Node *, Node *> parentToSelfLoopDummy;
+		for (Node &node : layer.nodes)
+		{
+			for (const EdgeInfo &edge : node.nexts)
+			{
+				Node &target = edge.target.get();
+				// Same-layer edge to a dummy indicates a self-loop structure
+				if (target.layer == node.layer &&
+				    dynamic_cast<DummyNode *>(&target) &&
+				    &target.nexts.at(0).target.get() == &node)
+				{
+					parentToSelfLoopDummy[&node] = &target;
+				}
+			}
+		}
+
+		// Reorder: for each parent, move its self-loop dummy to immediately
+		// follow it
+		std::vector<std::reference_wrapper<Node>> reordered;
+		std::set<const Node *> processed;
+
+		for (Node &node : layer.nodes)
+		{
+			if (processed.count(&node)) continue;
+
+			reordered.push_back(std::ref(node));
+			processed.insert(&node);
+
+			// Add the self-loop dummy if this node has one
+			auto it = parentToSelfLoopDummy.find(&node);
+			if (it != parentToSelfLoopDummy.end())
+			{
+				Node *dummy = it->second;
+				if (!processed.count(dummy))
+				{
+					reordered.push_back(std::ref(*dummy));
+					processed.insert(dummy);
+				}
+			}
+		}
+
+		layer.nodes = reordered;
+	}
+
 	// Place horizontally: space out blocks within each layer
 	const unsigned BLOCK_GAP = 20;
 	for (const LayerInfo &layer : layers)
