@@ -7,6 +7,7 @@
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
 #include <QGraphicsSceneHoverEvent>
+#include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSceneWheelEvent>
 #include <QGraphicsView>
 #include <QLabel>
@@ -15,6 +16,7 @@
 #include <map>
 #include <optional>
 #include <qgraphicsitem.h>
+#include <set>
 #include <types.h>
 #include <vector>
 
@@ -46,23 +48,34 @@ void openBasicBlockViewWindow(QWidget *parent, int force = 0);
 struct BasicBlock;
 struct BasicBlockSet;
 
+enum class HighlightStyle
+{
+	None,
+	Direct,
+	Indirect,
+};
+
 struct Node;
 struct EdgeInfo
 {
-	const Node &source;
+	Node &source;
 	// reference_wrapper so that it is rebindable
 	std::reference_wrapper<Node> target;
 	// This can be an "under" or "over" track, depending on
 	// if the edge is going upwards or downwards
 	unsigned track;
+	// Graphics item for this edge (set during edge drawing)
+	QGraphicsPathItem *pathItem = nullptr;
 
 	bool needsOverTrack() const;
 	bool needsUnderTrack() const;
+	void setHighlight(bool highlighted) const;
 };
 
 struct Node
 {
-	std::vector<EdgeInfo> nexts;
+	std::vector<EdgeInfo> nexts;         // Outgoing edges
+	std::vector<EdgeInfo *> prevs;       // Incoming edges (pointers to EdgeInfo in other nodes)
 	std::optional<unsigned> layer = std::nullopt;
 
 	virtual QGraphicsItem &asQGraphicsItem() = 0;
@@ -71,6 +84,7 @@ struct Node
 	virtual QSizeF size() const = 0;
 	virtual void setX(qreal x) = 0;
 	virtual void setY(qreal y) = 0;
+	virtual void setHighlight(HighlightStyle style) = 0;
 	virtual ~Node() = default;
 };
 
@@ -86,6 +100,9 @@ public:
 	QSizeF size() const override { return QGraphicsProxyWidget::size(); }
 	void setX(qreal x) override { QGraphicsProxyWidget::setX(x); }
 	void setY(qreal y) override { QGraphicsProxyWidget::setY(y); }
+	void setHighlight(HighlightStyle style) override;
+
+	static BasicBlockNode *lockedNode;
 
 protected:
 	// Ignore wheel events. We want to scroll the
@@ -97,6 +114,13 @@ protected:
 
 	void hoverEnterEvent(QGraphicsSceneHoverEvent *event) override;
 	void hoverLeaveEvent(QGraphicsSceneHoverEvent *event) override;
+	void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
+
+private:
+	std::set<Node *> highlightedNodes;
+	std::set<EdgeInfo *> highlightedEdges;
+	void clearHighlighting();
+	void highlightConnectedNodes();
 };
 
 struct DummyNode : public QGraphicsRectItem, public Node
@@ -108,6 +132,7 @@ struct DummyNode : public QGraphicsRectItem, public Node
 	QSizeF size() const override { return boundingRect().size(); }
 	void setX(qreal x) override { QGraphicsRectItem::setX(x); }
 	void setY(qreal y) override { QGraphicsRectItem::setY(y); }
+	void setHighlight(HighlightStyle style) override;
 };
 
 struct LayerInfo

@@ -23,6 +23,7 @@
 #include <iostream>
 #include <qgraphicsview.h>
 #include <qnamespace.h>
+#include <queue>
 #include <set>
 #include <stack>
 #include <stdio.h>
@@ -64,6 +65,8 @@
 
 static constexpr int TRACK_HEIGHT = 10;
 static constexpr bool DEBUG_GRAPH = false; // Set to true for debugging
+
+BasicBlockNode *BasicBlockNode::lockedNode = nullptr;
 
 static QPainterPath makeManhattanPath(const std::vector<QPointF> &points,
                                       qreal radius = 10.0)
@@ -330,6 +333,23 @@ bool EdgeInfo::needsOverTrack() const
 
 bool EdgeInfo::needsUnderTrack() const { return !needsOverTrack(); }
 
+void EdgeInfo::setHighlight(bool highlighted) const
+{
+	if (pathItem)
+	{
+		if (highlighted)
+		{
+			pathItem->setPen(QPen(QColor("#1976d2"), 4));
+			pathItem->setZValue(10);
+		}
+		else
+		{
+			pathItem->setPen(QPen(Qt::black, 2));
+			pathItem->setZValue(0);
+		}
+	}
+}
+
 DummyNode::DummyNode(QPointF pos)
 	: QGraphicsRectItem(pos.x(), pos.y(), DEBUG_GRAPH ? 10 : 0,
                         DEBUG_GRAPH ? 10 : 0)
@@ -339,6 +359,13 @@ DummyNode::DummyNode(QPointF pos)
 		setPen(Qt::NoPen);
 		setBrush(Qt::NoBrush);
 	}
+}
+
+void DummyNode::setHighlight(HighlightStyle style)
+{
+	// Dummy nodes don't have visual highlighting
+	// The traversal in BasicBlockNode::highlightConnectedNodes handles them
+	(void)style;
 }
 
 // Returns max layer assigned
@@ -739,10 +766,19 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 		node->setY(yPos);
 	}
 
-	// Draw edges
-	for (const Node *fromNode : nodes)
+	// Build incoming edge lists (prevs)
+	for (Node *node : nodes)
 	{
-		for (const EdgeInfo &nextEdge : fromNode->nexts)
+		for (EdgeInfo &edge : node->nexts)
+		{
+			edge.target.get().prevs.push_back(&edge);
+		}
+	}
+
+	// Draw edges
+	for (Node *fromNode : nodes)
+	{
+		for (EdgeInfo &nextEdge : fromNode->nexts)
 		{
 			const Node &toNode = nextEdge.target;
 			const unsigned track = nextEdge.track;
@@ -821,8 +857,7 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				DEBUG_GRAPH
 					? (fromNode->layer < toNode.layer ? Qt::black : Qt::red)
 					: Qt::black;
-			auto *pathItem = scene_.addPath(path, QPen(color, 2));
-			pathItem->setZValue(10);
+			nextEdge.pathItem = scene_.addPath(path, QPen(color, 2));
 		}
 	}
 }
@@ -916,25 +951,37 @@ BasicBlockNode::BasicBlockNode(const BasicBlock &bb, QGraphicsItem *parent)
 	setAcceptHoverEvents(true);
 }
 
-void BasicBlockNode::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
+void BasicBlockNode::setHighlight(HighlightStyle style)
 {
-	if (QLabel *label = qobject_cast<QLabel *>(widget()))
+	QLabel *label = qobject_cast<QLabel *>(widget());
+	if (!label) return;
+
+	// Only set visual style - no propagation
+	switch (style)
 	{
+	case HighlightStyle::Direct:
 		// clang-format off
 		label->setStyleSheet(
-			"background-color: #e3f2fd;"
+			"background-color: #1976d2;"
+			"color: white;"
 			"padding: 2px;"
-			"border: 2px solid #2196f3;"
+			"border: 3px solid #0d47a1;"
 		);
 		// clang-format on
-	}
-	QGraphicsProxyWidget::hoverEnterEvent(event);
-}
+		break;
 
-void BasicBlockNode::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
-{
-	if (QLabel *label = qobject_cast<QLabel *>(widget()))
-	{
+	case HighlightStyle::Indirect:
+		// clang-format off
+		label->setStyleSheet(
+			"background-color: #64b5f6;"
+			"color: white;"
+			"padding: 2px;"
+			"border: 3px solid #1976d2;"
+		);
+		// clang-format on
+		break;
+
+	case HighlightStyle::None:
 		// clang-format off
 		label->setStyleSheet(
 			"background-color: white;"
@@ -942,6 +989,139 @@ void BasicBlockNode::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 			"border: 2px solid #ccc;"
 		);
 		// clang-format on
+		break;
 	}
+}
+
+void BasicBlockNode::highlightConnectedNodes()
+{
+	// Follow edges to find connected nodes, traversing through dummies
+	// Track direction to avoid following edges in wrong direction
+	struct NodeWithDirection
+	{
+		Node *node;
+		bool followingForward; // true if we got here via nexts, false if via prevs
+	};
+
+	std::queue<NodeWithDirection> toVisit;
+	std::set<Node *> visited;
+
+	// Add immediate neighbors to queue
+	for (EdgeInfo &edge : nexts)
+	{
+		toVisit.push({&edge.target.get(), true});
+		highlightedEdges.insert(&edge);
+	}
+	for (EdgeInfo *edge : prevs)
+	{
+		toVisit.push({&edge->source, false});
+		highlightedEdges.insert(edge);
+	}
+
+	// Traverse, highlighting edges and collecting real nodes
+	while (!toVisit.empty())
+	{
+		NodeWithDirection current = toVisit.front();
+		toVisit.pop();
+
+		Node *node = current.node;
+		bool followingForward = current.followingForward;
+
+		if (visited.count(node)) continue;
+		visited.insert(node);
+
+		if (dynamic_cast<DummyNode *>(node))
+		{
+			// Continue through dummy nodes in the same direction
+			if (followingForward)
+			{
+				for (EdgeInfo &edge : node->nexts)
+				{
+					toVisit.push({&edge.target.get(), true});
+					highlightedEdges.insert(&edge);
+				}
+			}
+			else
+			{
+				for (EdgeInfo *edge : node->prevs)
+				{
+					toVisit.push({&edge->source, false});
+					highlightedEdges.insert(edge);
+				}
+			}
+		}
+		else if (node != this)
+		{
+			// Real node - highlight it (excluding self to handle self-loops)
+			highlightedNodes.insert(node);
+			node->setHighlight(HighlightStyle::Indirect);
+		}
+	}
+
+	// Highlight all edges
+	for (EdgeInfo *edge : highlightedEdges)
+	{
+		edge->setHighlight(true);
+	}
+}
+
+void BasicBlockNode::clearHighlighting()
+{
+	for (Node *node : highlightedNodes)
+	{
+		node->setHighlight(HighlightStyle::None);
+	}
+	for (EdgeInfo *edge : highlightedEdges)
+	{
+		edge->setHighlight(false);
+	}
+	highlightedNodes.clear();
+	highlightedEdges.clear();
+}
+
+void BasicBlockNode::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
+{
+	// Don't highlight on hover if something is locked
+	if (lockedNode != nullptr) return;
+
+	setHighlight(HighlightStyle::Direct);
+	highlightConnectedNodes();
+	QGraphicsProxyWidget::hoverEnterEvent(event);
+}
+
+void BasicBlockNode::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
+{
+	// Don't clear highlighting on hover leave if something is locked
+	if (lockedNode != nullptr) return;
+
+	setHighlight(HighlightStyle::None);
+	clearHighlighting();
 	QGraphicsProxyWidget::hoverLeaveEvent(event);
+}
+
+void BasicBlockNode::mousePressEvent(QGraphicsSceneMouseEvent *event)
+{
+	if (lockedNode == this)
+	{
+		// Unlock: clear highlighting
+		setHighlight(HighlightStyle::None);
+		clearHighlighting();
+		lockedNode = nullptr;
+	}
+	else
+	{
+		// Clear previous lock if any
+		if (lockedNode != nullptr)
+		{
+			lockedNode->setHighlight(HighlightStyle::None);
+			lockedNode->clearHighlighting();
+		}
+
+		// Lock this node: set highlighting
+		lockedNode = this;
+		setHighlight(HighlightStyle::Direct);
+		highlightConnectedNodes();
+	}
+
+	QGraphicsProxyWidget::mousePressEvent(event);
 }
