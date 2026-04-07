@@ -65,6 +65,55 @@
 
 constexpr int TRACK_HEIGHT = 10;
 
+static QPainterPath makeManhattanPath(const std::vector<QPointF> &points, qreal radius = 10.0)
+{
+	QPainterPath path;
+	if (points.empty()) return path;
+	if (points.size() == 1)
+	{
+		path.moveTo(points[0]);
+		return path;
+	}
+
+	path.moveTo(points[0]);
+
+	for (size_t i = 1; i < points.size(); ++i)
+	{
+		const QPointF &prev = points[i - 1];
+		const QPointF &curr = points[i];
+
+		if (i == points.size() - 1)
+		{
+			// Last segment - no curve needed
+			path.lineTo(curr);
+		}
+		else
+		{
+			const QPointF &next = points[i + 1];
+
+			// Calculate the direction vectors
+			QPointF toCurr = curr - prev;
+			QPointF toNext = next - curr;
+
+			qreal distToCurr = std::sqrt(toCurr.x() * toCurr.x() + toCurr.y() * toCurr.y());
+			qreal distToNext = std::sqrt(toNext.x() * toNext.x() + toNext.y() * toNext.y());
+
+			// Limit radius to half the shorter segment
+			qreal actualRadius = std::min(radius, std::min(distToCurr, distToNext) / 2.0);
+
+			// Draw line to point before curve
+			QPointF beforeCurve = curr - (toCurr / distToCurr) * actualRadius;
+			path.lineTo(beforeCurve);
+
+			// Draw arc around the corner
+			QPointF afterCurve = curr + (toNext / distToNext) * actualRadius;
+			path.quadTo(curr, afterCurve);
+		}
+	}
+
+	return path;
+}
+
 struct Instruction
 {
 	uint16 address;
@@ -326,6 +375,7 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 {
 	setScene(&scene_);
 	setDragMode(QGraphicsView::ScrollHandDrag);
+	setRenderHint(QPainter::Antialiasing, true);
 
 	// Make nodes
 	for (const auto &[addr, bb] : bbSet.basicBlocks)
@@ -507,32 +557,26 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 			if (*fromNode->layer < *toNode.layer)
 			{
 				// Downwards
-				QPointF pt = fromBottom;
-				path.moveTo(pt);
-				// Down to the track section
-				pt.ry() = fromPos.y() + fromLayer.nodeAreaHeight() +
-						  TRACK_HEIGHT * (1 + track);
-				path.lineTo(pt);
-				// Sideways to the target
-				pt.rx() = toTop.x();
-				path.lineTo(pt);
-				// Down to the target
-				path.lineTo(toTop);
+				const qreal trackY = fromPos.y() + fromLayer.nodeAreaHeight() +
+									 TRACK_HEIGHT * (1 + track);
+				path = makeManhattanPath({
+					fromBottom,
+					{fromBottom.x(), trackY},
+					{toTop.x(), trackY},
+					toTop,
+				});
 			}
 			else if (*fromNode->layer > *toNode.layer)
 			{
 				assert(dynamic_cast<const DummyNode *>(fromNode));
 				// Upwards (to previous layer)
-				QPointF pt = fromTop;
-				path.moveTo(pt);
-				// Up to the track section
-				pt.ry() = fromPos.y() - TRACK_HEIGHT * (1 + track);
-				path.lineTo(pt);
-				// Sideways to the target
-				pt.rx() = toBottom.x();
-				path.lineTo(pt);
-				// Into the target (from the bottom)
-				path.lineTo(toBottom);
+				const qreal trackY = fromPos.y() - TRACK_HEIGHT * (1 + track);
+				path = makeManhattanPath({
+					fromTop,
+					{fromTop.x(), trackY},
+					{toBottom.x(), trackY},
+					toBottom,
+				});
 			}
 			else if (*fromNode->layer == *toNode.layer)
 			{
@@ -540,31 +584,25 @@ GraphView::GraphView(const BasicBlockSet &bbSet, QWidget *parent)
 				if (dynamic_cast<const DummyNode *>(fromNode))
 				{
 					assert(!dynamic_cast<const DummyNode *>(&toNode));
-					QPointF pt = fromTop;
-					path.moveTo(pt);
-					// Up to the track section
-					pt.ry() = fromPos.y() - TRACK_HEIGHT * (1 + track);
-					path.lineTo(pt);
-					// Sideways to the target
-					pt.rx() = toTop.x();
-					path.lineTo(pt);
-					// Into the target (from the top)
-					path.lineTo(toTop);
+					const qreal trackY = fromPos.y() - TRACK_HEIGHT * (1 + track);
+					path = makeManhattanPath({
+						fromTop,
+						{fromTop.x(), trackY},
+						{toTop.x(), trackY},
+						toTop,
+					});
 				}
 				else
 				{
 					assert(dynamic_cast<const DummyNode *>(&toNode));
-					QPointF pt = fromBottom;
-					path.moveTo(pt);
-					// Down to the track section
-					pt.ry() = fromPos.y() + fromLayer.nodeAreaHeight() +
-							  TRACK_HEIGHT * (1 + track);
-					path.lineTo(pt);
-					// Sideways to the target
-					pt.rx() = toBottom.x();
-					path.lineTo(pt);
-					// Into the target (from the bottom)
-					path.lineTo(toBottom);
+					const qreal trackY = fromPos.y() + fromLayer.nodeAreaHeight() +
+										 TRACK_HEIGHT * (1 + track);
+					path = makeManhattanPath({
+						fromBottom,
+						{fromBottom.x(), trackY},
+						{toBottom.x(), trackY},
+						toBottom,
+					});
 				}
 			}
 			else
